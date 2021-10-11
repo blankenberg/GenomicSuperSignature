@@ -10,13 +10,17 @@
 #' abbreviated.
 #' @param scale Default is \code{FALSE}. If it is set to \code{TRUE}, dataset
 #' will be row normalized by \link{rowNorm} function.
+#' @param sc Default is \code{FALSE}. If the input dataset is a sigle-cell RNA
+#' sequencing (scRNAseq) data, you should set this \code{TRUE}. If this is
+#' \code{FALSE} with scRNAseq data, the computation might not succeed.
 #'
 #' @return A matrix of Pearson correlation coefficient (default, defined through
 #' \code{method} argument) between RAVs (row) and the top 8 PCs from the
 #' datasets (column)
 #'
 .loadingCor <- function(dataset, avgLoading,
-                        method = "pearson", scale = FALSE) {
+                        method = "pearson", scale = FALSE,
+                        sc = FALSE) {
 
     # Extract expression matrix from different classes
     dat <- .extractExprsMatrix(dataset)
@@ -25,11 +29,30 @@
     stopifnot(length(scale) == 1L, !is.na(scale), is.logical(scale))
     if (scale) {dat <- rowNorm(dat)}
 
-    dat <- dat[apply(dat, 1,
-                     function (x) {!any(is.na(x) | (x==Inf) | (x==-Inf))}),]
-    gene_common <- intersect(rownames(avgLoading), rownames(dat))
-    prcomRes <- stats::prcomp(t(dat[gene_common,]))  # centered, but not scaled
-    loadings <- prcomRes$rotation[, seq_len(8)]
+    # Dimensional reduction
+    if (isTRUE(sc)) {
+        # gene_common <- intersect(rownames(avgLoading), rownames(dataset))
+        # irlbaRes <- irlba::prcomp_irlba(t(dat[gene_common,]),
+        #                                 n = 8,  # top 8 PCs from the input
+        #                                 scale. = TRUE)
+        # loadings <- irlbaRes$rotation
+        # rownames(loadings) <- gene_common
+        irlbaRes <- monocle3::preprocess_cds(dataset,
+                                             method = "PCA",
+                                             norm_method = "log",
+                                             num_dim = 8,
+                                             verbose = FALSE)
+        loadings <- irlbaRes@preprocess_aux$gene_loadings
+        gene_common <- intersect(rownames(avgLoading), rownames(loadings))
+
+    } else {
+        dat <- dat[apply(dat, 1,
+                         function (x) {!any(is.na(x) | (x==Inf) | (x==-Inf))}),]
+        gene_common <- intersect(rownames(avgLoading), rownames(dat))
+        prcomRes <- stats::prcomp(t(dat[gene_common,]))  # centered, but not scaled
+        loadings <- prcomRes$rotation[, seq_len(8)]
+    }
+
     loading_cor <- abs(stats::cor(avgLoading[gene_common,],
                                   loadings[gene_common,],
                                   use = "pairwise.complete.obs",
@@ -59,6 +82,9 @@
 #' argument as "all". \code{level = "all"} can be used only for one dataset.
 #' @param scale Default is \code{FALSE}. If it is set to \code{TRUE}, dataset
 #' will be row normalized by \link{rowNorm} function.
+#' @param sc Default is \code{FALSE}. If the input dataset is a sigle-cell RNA
+#' sequencing (scRNAseq) data, you should set this \code{TRUE}. If this is
+#' \code{FALSE} with scRNAseq data, the computation might not succeed.
 #'
 #' @return A data frame containing the maximum pearson correlation coefficient
 #' between the top 8 PCs of the dataset and pre-calculated average loadings
@@ -82,7 +108,8 @@
 #'
 #' @export
 validate <- function(dataset, RAVmodel, method = "pearson",
-                     maxFrom = "PC", level = "max", scale = FALSE) {
+                     maxFrom = "PC", level = "max", scale = FALSE,
+                     sc = FALSE) {
 
     if (!is.list(dataset)) {
         if (ncol(dataset) < 8) {
@@ -102,7 +129,7 @@ validate <- function(dataset, RAVmodel, method = "pearson",
     if (maxFrom == "PC") {
         # For a single dataset
         if (!is.list(dataset)) {
-            x <- .loadingCor(dataset, avgLoading, method, scale)
+            x <- .loadingCor(dataset, avgLoading, method, scale, sc)
             if (level == "max") {
                 z <- apply(x, 1, max) %>% as.data.frame   # rowMax
                 z$PC <- apply(x, 1, which.max)
@@ -118,7 +145,7 @@ validate <- function(dataset, RAVmodel, method = "pearson",
             }
         } else {
             # For a list of datasets
-            x <- lapply(dataset, .loadingCor, avgLoading, method, scale)
+            x <- lapply(dataset, .loadingCor, avgLoading, method, scale, sc)
             l <- nrow(x[[1]]) # the number of RAVs in validation output
             if (level == "max") {
                 z <- vapply(x, function(y) {apply(y, 1, max)},
@@ -138,7 +165,7 @@ validate <- function(dataset, RAVmodel, method = "pearson",
     # The maximum correlation coefficient among avgLoadings
     else if (maxFrom == "avgLoading") {
         if (!is.list(dataset)) {
-            x <- .loadingCor(dataset, avgLoading, method)
+            x <- .loadingCor(dataset, avgLoading, method, sc)
             if (level == "max") {
                 z <- apply(x, 2, max) %>% as.data.frame # colMax
                 max_z_ind <- apply(x, 2, which.max)
@@ -149,7 +176,7 @@ validate <- function(dataset, RAVmodel, method = "pearson",
                 return(x)
             }
         } else {
-            x <- lapply(dataset, .loadingCor, avgLoading, method)
+            x <- lapply(dataset, .loadingCor, avgLoading, method, sc)
             if (level == "max") {
                 z <- apply(x, 2, max)
                 return(z)
